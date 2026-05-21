@@ -146,6 +146,10 @@ uint8_t TestDriver::gen_random_sew() {
     case VFloatCvt: return rand()%4; break;
     case FloatCvtF2X: return (rand()%3)+1 ; break;
     case FloatCvtI2F: return 0 ; break;
+    case VFloatFMA:
+      if (input.fuOpType == VFWMACCBF16) return 0;
+      else return (rand()%3)+1;
+      break;
     case VIntegerMAC: {
       if (input.fuOpType == VWMUL || input.fuOpType == VWMULU || input.fuOpType == VWMULSU ||
           input.fuOpType == VWMACCU || input.fuOpType == VWMACC || input.fuOpType == VWMACCSU || input.fuOpType == VWMACCUS) {
@@ -183,6 +187,9 @@ uint8_t TestDriver::gen_random_sew() {
 }
 
 bool TestDriver::gen_random_widen() {
+  if (input.fuType == VFloatFMA && input.fuOpType == VFWMACCBF16) {
+    return true;
+  }
   if(input.fuType == VIntegerMAC){
     if (input.fuOpType == VWMUL || input.fuOpType == VWMULU || input.fuOpType == VWMULSU ||
         input.fuOpType == VWMACCU || input.fuOpType == VWMACC || input.fuOpType == VWMACCSU || input.fuOpType == VWMACCUS) {
@@ -378,6 +385,7 @@ void TestDriver::gen_random_uopidx() {
       break;
     }
     case VFloatAdder: input.uop_idx = input.widen ? rand() % 2 : 0; break;
+    case VFloatFMA: input.uop_idx = input.widen ? rand() % 2 : 0; break;
     default: input.uop_idx = 0;
   }
 }

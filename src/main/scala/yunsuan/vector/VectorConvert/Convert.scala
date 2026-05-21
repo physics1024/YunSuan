@@ -24,10 +24,12 @@ class VectorCvt(xlen :Int) extends Module{
   val io = IO(new VectorCvtIO(xlen))
   val (fire, src, opType, sew, rm, isFpToVecInst, isFround, isFcvtmod) = (io.fire, io.src, io.opType, io.sew, io.rm, io.isFpToVecInst, io.isFround, io.isFcvtmod)
   val widen = opType(4, 3) // 0->single 1->widen 2->norrow => width of result
+  val isVfnCvtBf16 = opType === "b11_011101".U
+  val isVfwCvtBf16 = opType === "b11_001101".U
 
   // input width 8， 16， 32， 64
   val input1H = Wire(UInt(4.W))
-  input1H := chisel3.util.experimental.decode.decoder(
+  val input1HCommon = chisel3.util.experimental.decode.decoder(
     widen ## sew,
     TruthTable(
       Seq(
@@ -46,10 +48,11 @@ class VectorCvt(xlen :Int) extends Module{
       BitPat("b0000")
     )
   )
+  input1H := Mux(isVfnCvtBf16, "b0100".U, Mux(isVfwCvtBf16, "b0010".U, input1HCommon))
 
   // output width 8， 16， 32， 64
   val output1H = Wire(UInt(4.W))
-  output1H := chisel3.util.experimental.decode.decoder(
+  val output1HCommon = chisel3.util.experimental.decode.decoder(
     widen ## sew,
     TruthTable(
       Seq(
@@ -68,6 +71,7 @@ class VectorCvt(xlen :Int) extends Module{
       BitPat("b0000")
     )
   )
+  output1H := Mux(isVfnCvtBf16, "b0010".U, Mux(isVfwCvtBf16, "b0100".U, output1HCommon))
   dontTouch(input1H)
   dontTouch(output1H)
 

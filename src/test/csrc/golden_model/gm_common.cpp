@@ -13,6 +13,7 @@ VecOutput VPUGoldenModel::get_expected_output(VecInput input) {
   int half_number = number >> 1;
   int result_shift_len = 8 << sew;
   int widenNorrow = (input.fuOpType >> 3) & 0X3;
+  int cvtWidenNorrow = (input.fuType == VFloatCvt && input.fuOpType == VFNCVTBF16_FFW) ? 2 : widenNorrow;
   int i2f_inputType = (input.fuOpType >> 3) & 0X1;
   int i2f_number = (128 / 8) >> (i2f_inputType+2);
   int i2f_half_number = i2f_number >> 1;
@@ -24,7 +25,7 @@ VecOutput VPUGoldenModel::get_expected_output(VecInput input) {
   ElementOutput output_part[number];
   if (input.fuType == VFloatCvt){
 
-    if(widenNorrow == 1){ //widen
+    if(cvtWidenNorrow == 1){ //widen
       half_number = half_number >> 1;
       result_shift_len = result_shift_len << 1;
       for(int i = 0; i < number; i++) {
@@ -42,7 +43,7 @@ VecOutput VPUGoldenModel::get_expected_output(VecInput input) {
           exit(1);
         }
       }
-    }else if(widenNorrow == 2){ // norrow
+    }else if(cvtWidenNorrow == 2){ // norrow
       half_number = half_number >> 1;
       for(int i = 0; i < number/2; i++) {
         ElementInput element = select_element(input, i);
@@ -59,7 +60,7 @@ VecOutput VPUGoldenModel::get_expected_output(VecInput input) {
           exit(1);
         }
       }
-    }else if(widenNorrow == 0){ // single
+    }else if(cvtWidenNorrow == 0){ // single
       for(int i = 0; i < number; i++) {
         ElementInput element = select_element(input, i);
         switch (sew) {
@@ -218,8 +219,20 @@ VecOutput VPUGoldenModel::get_expected_output(VecInput input) {
         exit(1);
       }
     }
-  }
-  else{
+  }else if (input.fuType == VFloatFMA && input.fuOpType == VFWMACCBF16) {
+    number = 4;
+    half_number = 2;
+    result_shift_len = 32;
+    for(int i = 0; i < number; i++) {
+      ElementInput element = select_element(input, i);
+      output_part[i] = calculation_e32(element);
+      mask = 0xFFFFFFFF;
+      if (output_part[i].fflags > 0x1f) {
+        printf("Bad fflags of %x, check golden model bf16 fma %d\n", output_part[i].fflags, i);
+        exit(1);
+      }
+    }
+  }else{
     for(int i = 0; i < number; i++) {
       ElementInput element = select_element(input, i);
       switch (sew) {
@@ -246,7 +259,7 @@ VecOutput VPUGoldenModel::get_expected_output(VecInput input) {
         output.result[i] += (uint64_t)(output_part[i*half_number+j].result&mask) << (j*result_shift_len);
         output.fflags[i] += (uint32_t)output_part[i*half_number+j].fflags << j;
       }else if(input.fuType == VFloatCvt){
-        if(widenNorrow == 1){//widen
+        if(cvtWidenNorrow == 1){//widen
           output.result[i] += ((uint64_t)output_part[(i<<1)*half_number+j].result&mask) << (j*result_shift_len);
           output.fflags[i] += (uint32_t)output_part[(i<<1)*half_number+j].fflags << (j*5);
         }else {//single or norrow
@@ -364,6 +377,11 @@ ElementInput VPUGoldenModel::select_element(VecInput input, int idx) {
     }
     else if(input.fuType == VFloatFMA) {
       switch (sew) {
+        case 0:
+          element.src1 = (uint64_t)input16->src1[widen_idx];
+          element.src2 = input.is_frs1 ? (uint64_t)input64->src2[0] : (uint64_t)input16->src2[widen_idx];
+          element.src3 = (uint64_t)input32->src3[idx];
+          break;
         case 2:
           element.src1 = (uint64_t)input16->src1[widen_idx];
           element.src2 = input.is_frs1 ? (uint64_t)input64->src2[0] : (uint64_t)input16->src2[widen_idx];
@@ -402,7 +420,7 @@ ElementInput VPUGoldenModel::select_element(VecInput input, int idx) {
           break;
       }
     }
-  }else if((input.fuType == VFloatCvt) && (((input.fuOpType >>3) & 0X3) == 2) ){  //cvt norrow select 2sew
+  }else if((input.fuType == VFloatCvt) && ((((input.fuOpType >>3) & 0X3) == 2) || input.fuOpType == VFNCVTBF16_FFW) ){  //cvt norrow select 2sew
     switch (sew) {
       case 0:
         element.src1 = input.is_frs2 ? (uint64_t)input64->src1[0] : (uint64_t)input16->src1[idx];

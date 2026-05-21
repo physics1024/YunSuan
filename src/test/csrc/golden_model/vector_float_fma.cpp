@@ -1,6 +1,10 @@
 #include "../include/gm_common.h"
 #include <typeinfo>
 
+static uint32_t bf16_to_f32_bits_for_fma(uint16_t src) {
+  return ((uint32_t)src) << 16;
+}
+
 ElementOutput VGMFloatFMA::calculation_e16(ElementInput input) {
   fp_set_rm(input.rm);
   fp_clear_exception();
@@ -41,6 +45,12 @@ ElementOutput VGMFloatFMA::calculation_e32(ElementInput input) {
   ElementOutput output;
 
   switch(input.fuOpType) {
+    case VFWMACCBF16:
+      output.result = f32_mulAdd(
+        i2f32(bf16_to_f32_bits_for_fma((uint16_t)input.src2)),
+        i2f32(bf16_to_f32_bits_for_fma((uint16_t)input.src1)),
+        i2f32((uint32_t)input.src3)).v;
+      break;
     case VFMUL:
       if(input.widen) output.result = f32_mul(f16_to_f32(i2f16((uint16_t)input.src1)), f16_to_f32(i2f16((uint16_t)input.src2))).v;
       else  output.result = f32_mul(i2f32((uint32_t)input.src1), i2f32((uint32_t)input.src2)).v;
@@ -122,4 +132,3 @@ ElementOutput VGMFloatFMA::calculation_e64(ElementInput input) {
   if (verbose) { display_calculation(typeid(this).name(), __func__, input, output); }
   return output;
 }
-
