@@ -24,12 +24,41 @@ abstract class CVT(width: Int) extends Module{
 
 class VCVT(width: Int) extends Module{
   val io = IO(new CVTIO(width))
+  val isBf16Cvt = io.opType === "b11_011101".U || io.opType === "b11_001101".U
   val vcvtImpl = width match {
     case 16 => Module(new CVT16(16))
     case 32 => Module(new CVT32(32))
     case 64 => Module(new CVT64(64, isVectorCvt=true))
   }
-  io <> vcvtImpl.io
+  vcvtImpl.io.fire := io.fire
+  vcvtImpl.io.src := io.src
+  vcvtImpl.io.opType := io.opType
+  vcvtImpl.io.sew := io.sew
+  vcvtImpl.io.rm := io.rm
+  vcvtImpl.io.input1H := io.input1H
+  vcvtImpl.io.output1H := io.output1H
+  vcvtImpl.io.isFpToVecInst := io.isFpToVecInst
+  vcvtImpl.io.isFround := io.isFround
+  vcvtImpl.io.isFcvtmod := io.isFcvtmod
+
+  if (width >= 32) {
+    val bf16CvtImpl = Module(new CVT_bf16(width))
+    bf16CvtImpl.io.fire := io.fire
+    bf16CvtImpl.io.src := io.src
+    bf16CvtImpl.io.opType := io.opType
+    bf16CvtImpl.io.sew := io.sew
+    bf16CvtImpl.io.rm := io.rm
+    bf16CvtImpl.io.input1H := io.input1H
+    bf16CvtImpl.io.output1H := io.output1H
+    bf16CvtImpl.io.isFpToVecInst := io.isFpToVecInst
+    bf16CvtImpl.io.isFround := io.isFround
+    bf16CvtImpl.io.isFcvtmod := io.isFcvtmod
+    io.result := Mux(isBf16Cvt, bf16CvtImpl.io.result, vcvtImpl.io.result)
+    io.fflags := Mux(isBf16Cvt, bf16CvtImpl.io.fflags, vcvtImpl.io.fflags)
+  } else {
+    io.result := Mux(isBf16Cvt, 0.U(width.W), vcvtImpl.io.result)
+    io.fflags := Mux(isBf16Cvt, 0.U(5.W), vcvtImpl.io.fflags)
+  }
 }
 object VCVT {
   def apply(

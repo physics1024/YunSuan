@@ -3,6 +3,80 @@
 #include <typeinfo>
 #include <stdint.h>
 
+static uint32_t bf16_to_f32_bits(uint16_t src) {
+  uint16_t exp = (src >> 7) & 0xff;
+  uint16_t frac = src & 0x7f;
+  if (exp == 0xff && frac != 0) {
+    if ((frac & 0x40) == 0) {
+      softfloat_exceptionFlags |= softfloat_flag_invalid;
+    }
+    return 0x7fc00000;
+  }
+  return ((uint32_t)src) << 16;
+}
+
+static bool bf16_round_up(uint16_t kept, bool round, bool sticky, bool sign) {
+  bool guard = kept & 0x1;
+  bool inexact = round || sticky;
+  switch (softfloat_roundingMode) {
+    case softfloat_round_near_even:
+      return round && (sticky || guard);
+    case softfloat_round_minMag:
+      return false;
+    case softfloat_round_min:
+      return inexact && sign;
+    case softfloat_round_max:
+      return inexact && !sign;
+    case softfloat_round_near_maxMag:
+      return round;
+    case softfloat_round_odd:
+      return inexact && !guard;
+    default:
+      return false;
+  }
+}
+
+static uint16_t f32_to_bf16_bits(uint32_t src) {
+  bool sign = (src >> 31) & 0x1;
+  uint32_t exp = (src >> 23) & 0xff;
+  uint32_t frac = src & 0x7fffff;
+  if (exp == 0xff) {
+    if (frac != 0) {
+      if ((frac & 0x400000) == 0) {
+        softfloat_exceptionFlags |= softfloat_flag_invalid;
+      }
+      return 0x7fc0;
+    }
+    return (uint16_t)(src >> 16);
+  }
+
+  uint16_t kept = (uint16_t)(src >> 16);
+  bool round = (src >> 15) & 0x1;
+  bool sticky = (src & 0x7fff) != 0;
+  bool inexact = round || sticky;
+  uint16_t rounded = kept + (bf16_round_up(kept, round, sticky, sign) ? 1 : 0);
+  bool overflow = ((rounded >> 7) & 0xff) == 0xff;
+  bool underflow = exp == 0 && (((rounded >> 7) & 0xff) == 0) && inexact;
+
+  if (overflow) {
+    softfloat_exceptionFlags |= softfloat_flag_overflow | softfloat_flag_inexact;
+    bool roundToMin =
+      softfloat_roundingMode == softfloat_round_minMag ||
+      (softfloat_roundingMode == softfloat_round_max && sign) ||
+      (softfloat_roundingMode == softfloat_round_min && !sign) ||
+      softfloat_roundingMode == softfloat_round_odd;
+    return sign ? (roundToMin ? 0xff7f : 0xff80) : (roundToMin ? 0x7f7f : 0x7f80);
+  }
+
+  if (underflow) {
+    softfloat_exceptionFlags |= softfloat_flag_underflow;
+  }
+  if (inexact) {
+    softfloat_exceptionFlags |= softfloat_flag_inexact;
+  }
+  return rounded;
+}
+
 
 //                               width of output
 ElementOutput VGMFloatCvt::calculation_e8(ElementInput input) {
@@ -60,6 +134,9 @@ ElementOutput VGMFloatCvt::calculation_e16(ElementInput input) {
       output.result = i32_to_f32((int32_t)(int16_t)input.src1).v;  break;
     case VFWCVT_FFV:  //f16 -> f32 
       output.result = f16_to_f32(i2f16((uint16_t)input.src1)).v;
+      break;
+    case VFWCVTBF16_FFV: //bf16 -> f32
+      output.result = bf16_to_f32_bits((uint16_t)input.src1);
       break;
     case VFWCVT_RTZ_XUFV: //f16 -> ui32 trun 
       output.result = f16_to_ui32(i2f16((uint16_t)input.src1), softfloat_round_minMag, true);  break;
@@ -136,6 +213,8 @@ ElementOutput VGMFloatCvt::calculation_e32(ElementInput input) {
       output.result = i32_to_f16((uint32_t)input.src1).v;  break;
     case VFNCVT_FFW:  // f32 ->f16
       output.result = f32_to_f16(i2f32((uint32_t)input.src1)).v;  break;
+    case VFNCVTBF16_FFW: // f32 ->bf16
+      output.result = f32_to_bf16_bits((uint32_t)input.src1);  break;
     case VFNCVT_ROD_FFW:// f32 ->f16 rounding towards odd ？？？
       softfloat_roundingMode = softfloat_round_odd;
       output.result = f32_to_f16(i2f32((uint32_t)input.src1)).v;  
@@ -211,4 +290,3 @@ ElementOutput VGMFloatCvt::calculation_e64(ElementInput input) {
   if (verbose) { display_calculation(typeid(this).name(), __func__, input, output); }
   return output;
 }
-

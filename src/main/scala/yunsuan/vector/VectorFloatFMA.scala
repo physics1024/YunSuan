@@ -67,27 +67,42 @@ class VectorFloatFMA() extends Module{
   val is_vfnmadd = io.op_code === VfmaOpCode.vfnmadd
   val is_vfmsub  = io.op_code === VfmaOpCode.vfmsub
   val is_vfnmsub = io.op_code === VfmaOpCode.vfnmsub
-  val is_fp64                 = io.fp_format === 3.U(2.W)
+  val is_bf16_widening        = io.res_widening && io.fp_format === 0.U(2.W)
+  val fmaFpFormat             = Mux(is_bf16_widening, 2.U(2.W), io.fp_format)
+  val fmaResWidening          = io.res_widening && !is_bf16_widening
+  val is_fp64                 = fmaFpFormat === 3.U(2.W)
   val is_fp64_reg0            = RegEnable(is_fp64, fire)
   val is_fp64_reg1            = RegEnable(is_fp64_reg0, fire_reg0)
   val is_fp64_reg2            = RegEnable(is_fp64_reg1, fire_reg1)
-  val is_fp32                 = io.fp_format === 2.U(2.W)
+  val is_fp32                 = fmaFpFormat === 2.U(2.W)
   val is_fp32_reg0            = RegEnable(is_fp32, fire)
   val is_fp32_reg1            = RegEnable(is_fp32_reg0, fire_reg0)
   val is_fp32_reg2            = RegEnable(is_fp32_reg1, fire_reg1)
   def sign_inv(src: UInt,sel:Bool): UInt = {
     Cat(Mux(sel,~src.head(1),src.head(1)),src.tail(1))
   }
+  def bf16ToF32(src: UInt): UInt = {
+    require(src.getWidth == 16)
+    src(15) ## src(14, 7) ## src(6, 0) ## 0.U(16.W)
+  }
   val fp_a_is_sign_inv = is_vfnmacc || is_vfnmsac || is_vfnmadd || is_vfnmsub
   val fp_c_is_sign_inv = is_vfnmacc || is_vfmsac || is_vfnmadd || is_vfmsub
   val swap_fp_a_fp_c = is_vfmadd || is_vfnmadd || is_vfmsub || is_vfnmsub
+  val bf16_widen_a_0 = Mux(io.uop_idx, io.widen_a(47, 32), io.widen_a(15, 0))
+  val bf16_widen_a_1 = Mux(io.uop_idx, io.widen_a(63, 48), io.widen_a(31, 16))
+  val bf16_widen_b_0 = Mux(io.is_frs1, io.frs1(15, 0), Mux(io.uop_idx, io.widen_b(47, 32), io.widen_b(15, 0)))
+  val bf16_widen_b_1 = Mux(io.is_frs1, io.frs1(15, 0), Mux(io.uop_idx, io.widen_b(63, 48), io.widen_b(31, 16)))
+  val fp_a_f32_in_0 = Mux(is_bf16_widening, bf16ToF32(bf16_widen_a_0), io.fp_a(31, 0))
+  val fp_a_f32_in_1 = Mux(is_bf16_widening, bf16ToF32(bf16_widen_a_1), io.fp_a(63, 32))
+  val fp_b_f32_in_0 = Mux(is_bf16_widening, bf16ToF32(bf16_widen_b_0), Mux(io.is_frs1, io.frs1(31, 0), io.fp_b(31, 0)))
+  val fp_b_f32_in_1 = Mux(is_bf16_widening, bf16ToF32(bf16_widen_b_1), Mux(io.is_frs1, io.frs1(31, 0), io.fp_b(63, 32)))
   val fp_a_f64                = sign_inv(Mux(swap_fp_a_fp_c,io.fp_c(63,0),io.fp_a(63,0)),fp_a_is_sign_inv)
   val fp_b_f64                = Mux(io.is_frs1,io.frs1,io.fp_b(63,0))
   val fp_c_f64                = Mux(is_vfmul,0.U(64.W),sign_inv(Mux(swap_fp_a_fp_c,io.fp_a(63,0),io.fp_c(63,0)),fp_c_is_sign_inv))
-  val fp_a_f32_0              = sign_inv(Mux(swap_fp_a_fp_c,io.fp_c(31,0 ),io.fp_a(31,0 )),fp_a_is_sign_inv)
-  val fp_a_f32_1              = sign_inv(Mux(swap_fp_a_fp_c,io.fp_c(63,32),io.fp_a(63,32)),fp_a_is_sign_inv)
-  val fp_b_f32_0              = Mux(io.is_frs1,io.frs1(31,0),io.fp_b(31,0 ))
-  val fp_b_f32_1              = Mux(io.is_frs1,io.frs1(31,0),io.fp_b(63,32))
+  val fp_a_f32_0              = sign_inv(Mux(swap_fp_a_fp_c,io.fp_c(31,0 ),fp_a_f32_in_0),fp_a_is_sign_inv)
+  val fp_a_f32_1              = sign_inv(Mux(swap_fp_a_fp_c,io.fp_c(63,32),fp_a_f32_in_1),fp_a_is_sign_inv)
+  val fp_b_f32_0              = fp_b_f32_in_0
+  val fp_b_f32_1              = fp_b_f32_in_1
   val fp_c_f32_0              = Mux(is_vfmul,0.U(32.W),sign_inv(Mux(swap_fp_a_fp_c,io.fp_a(31,0 ),io.fp_c(31,0 )),fp_c_is_sign_inv))
   val fp_c_f32_1              = Mux(is_vfmul,0.U(32.W),sign_inv(Mux(swap_fp_a_fp_c,io.fp_a(63,32),io.fp_c(63,32)),fp_c_is_sign_inv))
   val fp_a_f16_0              = sign_inv(Mux(swap_fp_a_fp_c,io.fp_c(15,0 ),io.fp_a(15,0 )),fp_a_is_sign_inv)
@@ -116,9 +131,9 @@ class VectorFloatFMA() extends Module{
   val widen_sign_a_b_f16_0    = (widen_a_f16_0.head(1) ^ widen_b_f16_0.head(1)).asBool
   val widen_sign_a_b_f16_1    = (widen_a_f16_1.head(1) ^ widen_b_f16_1.head(1)).asBool
   val widen_sign_a_b_f32_0    = (widen_a_f32_0.head(1) ^ widen_b_f32_0.head(1)).asBool
-  val sign_a_b_f32_0          = Mux(io.res_widening & is_fp32,widen_sign_a_b_f16_0,(fp_a_f32_0.head(1) ^ fp_b_f32_0.head(1)).asBool)
-  val sign_a_b_f32_1          = Mux(io.res_widening & is_fp32,widen_sign_a_b_f16_1,(fp_a_f32_1.head(1) ^ fp_b_f32_1.head(1)).asBool)
-  val sign_a_b_f64            = Mux(io.res_widening & is_fp64,widen_sign_a_b_f32_0,(fp_a_f64(63) ^ fp_b_f64(63)).asBool)
+  val sign_a_b_f32_0          = Mux(fmaResWidening & is_fp32,widen_sign_a_b_f16_0,(fp_a_f32_0.head(1) ^ fp_b_f32_0.head(1)).asBool)
+  val sign_a_b_f32_1          = Mux(fmaResWidening & is_fp32,widen_sign_a_b_f16_1,(fp_a_f32_1.head(1) ^ fp_b_f32_1.head(1)).asBool)
+  val sign_a_b_f64            = Mux(fmaResWidening & is_fp64,widen_sign_a_b_f32_0,(fp_a_f64(63) ^ fp_b_f64(63)).asBool)
   val sign_c_f64              = fp_c_f64(63).asBool
   val sign_c_f32_0            = fp_c_f32_0.head(1).asBool
   val sign_c_f32_1            = fp_c_f32_1.head(1).asBool
@@ -202,14 +217,14 @@ class VectorFloatFMA() extends Module{
   val widen_b_significand_f16_1 = Cat(widen_b_f16_1(14,10).orR,widen_b_f16_1(9,0))
   val widen_a_significand_f32_0 = Cat(widen_a_f32_0(30,23).orR,widen_a_f32_0(22,0))
   val widen_b_significand_f32_0 = Cat(widen_b_f32_0(30,23).orR,widen_b_f32_0(22,0))
-  val fp_a_significand_f32_0  = Mux(io.res_widening & is_fp32,Cat(widen_a_significand_f16_0,0.U(13.W)),Cat(Ea_f32_0_is_not_zero,fp_a_f32_0(22,0)))
-  val fp_b_significand_f32_0  = Mux(io.res_widening & is_fp32,Cat(widen_b_significand_f16_0,0.U(13.W)),Cat(Eb_f32_0_is_not_zero,fp_b_f32_0(22,0)))
+  val fp_a_significand_f32_0  = Mux(fmaResWidening & is_fp32,Cat(widen_a_significand_f16_0,0.U(13.W)),Cat(Ea_f32_0_is_not_zero,fp_a_f32_0(22,0)))
+  val fp_b_significand_f32_0  = Mux(fmaResWidening & is_fp32,Cat(widen_b_significand_f16_0,0.U(13.W)),Cat(Eb_f32_0_is_not_zero,fp_b_f32_0(22,0)))
   val fp_c_significand_f32_0  = Cat(Ec_f32_0_is_not_zero,fp_c_f32_0(22,0))
-  val fp_a_significand_f32_1  = Mux(io.res_widening & is_fp32,Cat(widen_a_significand_f16_1,0.U(13.W)),Cat(Ea_f32_1_is_not_zero,fp_a_f32_1(22,0)))
-  val fp_b_significand_f32_1  = Mux(io.res_widening & is_fp32,Cat(widen_b_significand_f16_1,0.U(13.W)),Cat(Eb_f32_1_is_not_zero,fp_b_f32_1(22,0)))
+  val fp_a_significand_f32_1  = Mux(fmaResWidening & is_fp32,Cat(widen_a_significand_f16_1,0.U(13.W)),Cat(Ea_f32_1_is_not_zero,fp_a_f32_1(22,0)))
+  val fp_b_significand_f32_1  = Mux(fmaResWidening & is_fp32,Cat(widen_b_significand_f16_1,0.U(13.W)),Cat(Eb_f32_1_is_not_zero,fp_b_f32_1(22,0)))
   val fp_c_significand_f32_1  = Cat(Ec_f32_1_is_not_zero,fp_c_f32_1(22,0))
-  val fp_a_significand_f64    = Mux(io.res_widening & is_fp64,Cat(widen_a_significand_f32_0,0.U(29.W)),Cat(Ea_f64_is_not_zero,fp_a_f64.tail(exponentWidth+1)))
-  val fp_b_significand_f64    = Mux(io.res_widening & is_fp64,Cat(widen_b_significand_f32_0,0.U(29.W)),Cat(Eb_f64_is_not_zero,fp_b_f64.tail(exponentWidth+1)))
+  val fp_a_significand_f64    = Mux(fmaResWidening & is_fp64,Cat(widen_a_significand_f32_0,0.U(29.W)),Cat(Ea_f64_is_not_zero,fp_a_f64.tail(exponentWidth+1)))
+  val fp_b_significand_f64    = Mux(fmaResWidening & is_fp64,Cat(widen_b_significand_f32_0,0.U(29.W)),Cat(Eb_f64_is_not_zero,fp_b_f64.tail(exponentWidth+1)))
   val fp_c_significand_f64    = Cat(Ec_f64_is_not_zero,fp_c_f64.tail(exponentWidth+1))
   val rshiftBasicF64          = significandWidth + 3    
   val rshiftMaxF64            = 3*significandWidth + 4  
@@ -247,12 +262,12 @@ class VectorFloatFMA() extends Module{
   val biasF64 = (1 << (exponentWidth-1)) - 1
   val biasF32 = (1 << (8-1)) - 1
   val biasF16 = (1 << (5-1)) - 1
-  val Ea_fix_f64_widening = Mux(io.res_widening & is_fp64, Cat(widen_Ea_fix_f32_0.head(1),Fill(3,(~widen_Ea_fix_f32_0.head(1)).asUInt),widen_Ea_fix_f32_0(6,0)), Ea_fix_f64)
-  val Eb_fix_f64_widening = Mux(io.res_widening & is_fp64, Cat(widen_Eb_fix_f32_0.head(1),Fill(3,(~widen_Eb_fix_f32_0.head(1)).asUInt),widen_Eb_fix_f32_0(6,0)), Eb_fix_f64)
-  val Ea_fix_f32_widening_0 = Mux(io.res_widening & is_fp32, Cat(widen_Ea_fix_f16_0.head(1),Fill(3,(~widen_Ea_fix_f16_0.head(1)).asUInt),widen_Ea_fix_f16_0(3,0)), Ea_fix_f32_0)
-  val Eb_fix_f32_widening_0 = Mux(io.res_widening & is_fp32, Cat(widen_Eb_fix_f16_0.head(1),Fill(3,(~widen_Eb_fix_f16_0.head(1)).asUInt),widen_Eb_fix_f16_0(3,0)), Eb_fix_f32_0)
-  val Ea_fix_f32_widening_1 = Mux(io.res_widening & is_fp32, Cat(widen_Ea_fix_f16_1.head(1),Fill(3,(~widen_Ea_fix_f16_1.head(1)).asUInt),widen_Ea_fix_f16_1(3,0)), Ea_fix_f32_1)
-  val Eb_fix_f32_widening_1 = Mux(io.res_widening & is_fp32, Cat(widen_Eb_fix_f16_1.head(1),Fill(3,(~widen_Eb_fix_f16_1.head(1)).asUInt),widen_Eb_fix_f16_1(3,0)), Eb_fix_f32_1)
+  val Ea_fix_f64_widening = Mux(fmaResWidening & is_fp64, Cat(widen_Ea_fix_f32_0.head(1),Fill(3,(~widen_Ea_fix_f32_0.head(1)).asUInt),widen_Ea_fix_f32_0(6,0)), Ea_fix_f64)
+  val Eb_fix_f64_widening = Mux(fmaResWidening & is_fp64, Cat(widen_Eb_fix_f32_0.head(1),Fill(3,(~widen_Eb_fix_f32_0.head(1)).asUInt),widen_Eb_fix_f32_0(6,0)), Eb_fix_f64)
+  val Ea_fix_f32_widening_0 = Mux(fmaResWidening & is_fp32, Cat(widen_Ea_fix_f16_0.head(1),Fill(3,(~widen_Ea_fix_f16_0.head(1)).asUInt),widen_Ea_fix_f16_0(3,0)), Ea_fix_f32_0)
+  val Eb_fix_f32_widening_0 = Mux(fmaResWidening & is_fp32, Cat(widen_Eb_fix_f16_0.head(1),Fill(3,(~widen_Eb_fix_f16_0.head(1)).asUInt),widen_Eb_fix_f16_0(3,0)), Eb_fix_f32_0)
+  val Ea_fix_f32_widening_1 = Mux(fmaResWidening & is_fp32, Cat(widen_Ea_fix_f16_1.head(1),Fill(3,(~widen_Ea_fix_f16_1.head(1)).asUInt),widen_Ea_fix_f16_1(3,0)), Ea_fix_f32_1)
+  val Eb_fix_f32_widening_1 = Mux(fmaResWidening & is_fp32, Cat(widen_Eb_fix_f16_1.head(1),Fill(3,(~widen_Eb_fix_f16_1.head(1)).asUInt),widen_Eb_fix_f16_1(3,0)), Eb_fix_f32_1)
   val Eab_f64                     = Cat(0.U,Ea_fix_f64_widening +& Eb_fix_f64_widening).asSInt - biasF64.S + rshiftBasicF64.S
   val Eab_f32_0                   = Cat(0.U,Ea_fix_f32_widening_0 +& Eb_fix_f32_widening_0).asSInt - biasF32.S + rshiftBasicF32.S
   val Eab_f32_1                   = Cat(0.U,Ea_fix_f32_widening_1 +& Eb_fix_f32_widening_1).asSInt - biasF32.S + rshiftBasicF32.S
@@ -1155,16 +1170,16 @@ class VectorFloatFMA() extends Module{
   val result_overflow_down_f16_1 = Cat(sign_result_temp_f16_1_reg2, Fill(5-1,1.U), 0.U, Fill(11-1,1.U))
   val result_overflow_down_f16_2 = Cat(sign_result_temp_f16_2_reg2, Fill(5-1,1.U), 0.U, Fill(11-1,1.U))
   val result_overflow_down_f16_3 = Cat(sign_result_temp_f16_3_reg2, Fill(5-1,1.U), 0.U, Fill(11-1,1.U))
-  val fp_a_is_nan_f64   = io.fp_aIsFpCanonicalNAN | Mux(io.res_widening & is_fp64,widen_Ea_f32_0.andR,Ea_f64.andR  ) & fp_a_significand_f64.tail(1).orR
-  val fp_a_is_nan_f32_0 = io.fp_aIsFpCanonicalNAN | Mux(io.res_widening & is_fp32,widen_Ea_f16_0.andR,Ea_f32_0.andR) & fp_a_significand_f32_0.tail(1).orR
-  val fp_a_is_nan_f32_1 = io.fp_aIsFpCanonicalNAN | Mux(io.res_widening & is_fp32,widen_Ea_f16_1.andR,Ea_f32_1.andR) & fp_a_significand_f32_1.tail(1).orR
+  val fp_a_is_nan_f64   = io.fp_aIsFpCanonicalNAN | Mux(fmaResWidening & is_fp64,widen_Ea_f32_0.andR,Ea_f64.andR  ) & fp_a_significand_f64.tail(1).orR
+  val fp_a_is_nan_f32_0 = io.fp_aIsFpCanonicalNAN | Mux(fmaResWidening & is_fp32,widen_Ea_f16_0.andR,Ea_f32_0.andR) & fp_a_significand_f32_0.tail(1).orR
+  val fp_a_is_nan_f32_1 = io.fp_aIsFpCanonicalNAN | Mux(fmaResWidening & is_fp32,widen_Ea_f16_1.andR,Ea_f32_1.andR) & fp_a_significand_f32_1.tail(1).orR
   val fp_a_is_nan_f16_0 = io.fp_aIsFpCanonicalNAN | Ea_f16_0.andR & fp_a_significand_f16_0.tail(1).orR
   val fp_a_is_nan_f16_1 = io.fp_aIsFpCanonicalNAN | Ea_f16_1.andR & fp_a_significand_f16_1.tail(1).orR
   val fp_a_is_nan_f16_2 = io.fp_aIsFpCanonicalNAN | Ea_f16_2.andR & fp_a_significand_f16_2.tail(1).orR
   val fp_a_is_nan_f16_3 = io.fp_aIsFpCanonicalNAN | Ea_f16_3.andR & fp_a_significand_f16_3.tail(1).orR
-  val fp_b_is_nan_f64   = io.fp_bIsFpCanonicalNAN | Mux(io.res_widening & is_fp64,widen_Eb_f32_0.andR,Eb_f64.andR  ) & fp_b_significand_f64.tail(1).orR
-  val fp_b_is_nan_f32_0 = io.fp_bIsFpCanonicalNAN | Mux(io.res_widening & is_fp32,widen_Eb_f16_0.andR,Eb_f32_0.andR) & fp_b_significand_f32_0.tail(1).orR
-  val fp_b_is_nan_f32_1 = io.fp_bIsFpCanonicalNAN | Mux(io.res_widening & is_fp32,widen_Eb_f16_1.andR,Eb_f32_1.andR) & fp_b_significand_f32_1.tail(1).orR
+  val fp_b_is_nan_f64   = io.fp_bIsFpCanonicalNAN | Mux(fmaResWidening & is_fp64,widen_Eb_f32_0.andR,Eb_f64.andR  ) & fp_b_significand_f64.tail(1).orR
+  val fp_b_is_nan_f32_0 = io.fp_bIsFpCanonicalNAN | Mux(fmaResWidening & is_fp32,widen_Eb_f16_0.andR,Eb_f32_0.andR) & fp_b_significand_f32_0.tail(1).orR
+  val fp_b_is_nan_f32_1 = io.fp_bIsFpCanonicalNAN | Mux(fmaResWidening & is_fp32,widen_Eb_f16_1.andR,Eb_f32_1.andR) & fp_b_significand_f32_1.tail(1).orR
   val fp_b_is_nan_f16_0 = io.fp_bIsFpCanonicalNAN | Eb_f16_0.andR & fp_b_significand_f16_0.tail(1).orR
   val fp_b_is_nan_f16_1 = io.fp_bIsFpCanonicalNAN | Eb_f16_1.andR & fp_b_significand_f16_1.tail(1).orR
   val fp_b_is_nan_f16_2 = io.fp_bIsFpCanonicalNAN | Eb_f16_2.andR & fp_b_significand_f16_2.tail(1).orR
@@ -1177,16 +1192,16 @@ class VectorFloatFMA() extends Module{
   val fp_c_is_nan_f16_2 = io.fp_cIsFpCanonicalNAN | Ec_f16_2.andR & fp_c_significand_f16_2.tail(1).orR
   val fp_c_is_nan_f16_3 = io.fp_cIsFpCanonicalNAN | Ec_f16_3.andR & fp_c_significand_f16_3.tail(1).orR
   
-  val fp_a_is_snan_f64   = !io.fp_aIsFpCanonicalNAN & Mux(io.res_widening & is_fp64,widen_Ea_f32_0.andR,Ea_f64.andR  ) & !fp_a_significand_f64.tail(1).head(1) & fp_a_significand_f64.tail(2).orR
-  val fp_a_is_snan_f32_0 = !io.fp_aIsFpCanonicalNAN & Mux(io.res_widening & is_fp32,widen_Ea_f16_0.andR,Ea_f32_0.andR) & !fp_a_significand_f32_0.tail(1).head(1) & fp_a_significand_f32_0.tail(2).orR
-  val fp_a_is_snan_f32_1 = !io.fp_aIsFpCanonicalNAN & Mux(io.res_widening & is_fp32,widen_Ea_f16_1.andR,Ea_f32_1.andR) & !fp_a_significand_f32_1.tail(1).head(1) & fp_a_significand_f32_1.tail(2).orR
+  val fp_a_is_snan_f64   = !io.fp_aIsFpCanonicalNAN & Mux(fmaResWidening & is_fp64,widen_Ea_f32_0.andR,Ea_f64.andR  ) & !fp_a_significand_f64.tail(1).head(1) & fp_a_significand_f64.tail(2).orR
+  val fp_a_is_snan_f32_0 = !io.fp_aIsFpCanonicalNAN & Mux(fmaResWidening & is_fp32,widen_Ea_f16_0.andR,Ea_f32_0.andR) & !fp_a_significand_f32_0.tail(1).head(1) & fp_a_significand_f32_0.tail(2).orR
+  val fp_a_is_snan_f32_1 = !io.fp_aIsFpCanonicalNAN & Mux(fmaResWidening & is_fp32,widen_Ea_f16_1.andR,Ea_f32_1.andR) & !fp_a_significand_f32_1.tail(1).head(1) & fp_a_significand_f32_1.tail(2).orR
   val fp_a_is_snan_f16_0 = !io.fp_aIsFpCanonicalNAN & Ea_f16_0.andR & !fp_a_significand_f16_0.tail(1).head(1) & fp_a_significand_f16_0.tail(2).orR
   val fp_a_is_snan_f16_1 = !io.fp_aIsFpCanonicalNAN & Ea_f16_1.andR & !fp_a_significand_f16_1.tail(1).head(1) & fp_a_significand_f16_1.tail(2).orR
   val fp_a_is_snan_f16_2 = !io.fp_aIsFpCanonicalNAN & Ea_f16_2.andR & !fp_a_significand_f16_2.tail(1).head(1) & fp_a_significand_f16_2.tail(2).orR
   val fp_a_is_snan_f16_3 = !io.fp_aIsFpCanonicalNAN & Ea_f16_3.andR & !fp_a_significand_f16_3.tail(1).head(1) & fp_a_significand_f16_3.tail(2).orR
-  val fp_b_is_snan_f64   = !io.fp_bIsFpCanonicalNAN & Mux(io.res_widening & is_fp64,widen_Eb_f32_0.andR,Eb_f64.andR  ) & !fp_b_significand_f64.tail(1).head(1) & fp_b_significand_f64.tail(2).orR
-  val fp_b_is_snan_f32_0 = !io.fp_bIsFpCanonicalNAN & Mux(io.res_widening & is_fp32,widen_Eb_f16_0.andR,Eb_f32_0.andR) & !fp_b_significand_f32_0.tail(1).head(1) & fp_b_significand_f32_0.tail(2).orR
-  val fp_b_is_snan_f32_1 = !io.fp_bIsFpCanonicalNAN & Mux(io.res_widening & is_fp32,widen_Eb_f16_1.andR,Eb_f32_1.andR) & !fp_b_significand_f32_1.tail(1).head(1) & fp_b_significand_f32_1.tail(2).orR
+  val fp_b_is_snan_f64   = !io.fp_bIsFpCanonicalNAN & Mux(fmaResWidening & is_fp64,widen_Eb_f32_0.andR,Eb_f64.andR  ) & !fp_b_significand_f64.tail(1).head(1) & fp_b_significand_f64.tail(2).orR
+  val fp_b_is_snan_f32_0 = !io.fp_bIsFpCanonicalNAN & Mux(fmaResWidening & is_fp32,widen_Eb_f16_0.andR,Eb_f32_0.andR) & !fp_b_significand_f32_0.tail(1).head(1) & fp_b_significand_f32_0.tail(2).orR
+  val fp_b_is_snan_f32_1 = !io.fp_bIsFpCanonicalNAN & Mux(fmaResWidening & is_fp32,widen_Eb_f16_1.andR,Eb_f32_1.andR) & !fp_b_significand_f32_1.tail(1).head(1) & fp_b_significand_f32_1.tail(2).orR
   val fp_b_is_snan_f16_0 = !io.fp_bIsFpCanonicalNAN & Eb_f16_0.andR & !fp_b_significand_f16_0.tail(1).head(1) & fp_b_significand_f16_0.tail(2).orR
   val fp_b_is_snan_f16_1 = !io.fp_bIsFpCanonicalNAN & Eb_f16_1.andR & !fp_b_significand_f16_1.tail(1).head(1) & fp_b_significand_f16_1.tail(2).orR
   val fp_b_is_snan_f16_2 = !io.fp_bIsFpCanonicalNAN & Eb_f16_2.andR & !fp_b_significand_f16_2.tail(1).head(1) & fp_b_significand_f16_2.tail(2).orR
@@ -1212,16 +1227,16 @@ class VectorFloatFMA() extends Module{
   val has_snan_f16_1 = fp_a_is_snan_f16_1 | fp_b_is_snan_f16_1 | fp_c_is_snan_f16_1
   val has_snan_f16_2 = fp_a_is_snan_f16_2 | fp_b_is_snan_f16_2 | fp_c_is_snan_f16_2
   val has_snan_f16_3 = fp_a_is_snan_f16_3 | fp_b_is_snan_f16_3 | fp_c_is_snan_f16_3
-  val fp_a_is_inf_f64   = !io.fp_aIsFpCanonicalNAN & Mux(io.res_widening & is_fp64,widen_Ea_f32_0.andR,Ea_f64.andR  ) & !fp_a_significand_f64.tail(1).orR
-  val fp_a_is_inf_f32_0 = !io.fp_aIsFpCanonicalNAN & Mux(io.res_widening & is_fp32,widen_Ea_f16_0.andR,Ea_f32_0.andR) & !fp_a_significand_f32_0.tail(1).orR
-  val fp_a_is_inf_f32_1 = !io.fp_aIsFpCanonicalNAN & Mux(io.res_widening & is_fp32,widen_Ea_f16_1.andR,Ea_f32_1.andR) & !fp_a_significand_f32_1.tail(1).orR
+  val fp_a_is_inf_f64   = !io.fp_aIsFpCanonicalNAN & Mux(fmaResWidening & is_fp64,widen_Ea_f32_0.andR,Ea_f64.andR  ) & !fp_a_significand_f64.tail(1).orR
+  val fp_a_is_inf_f32_0 = !io.fp_aIsFpCanonicalNAN & Mux(fmaResWidening & is_fp32,widen_Ea_f16_0.andR,Ea_f32_0.andR) & !fp_a_significand_f32_0.tail(1).orR
+  val fp_a_is_inf_f32_1 = !io.fp_aIsFpCanonicalNAN & Mux(fmaResWidening & is_fp32,widen_Ea_f16_1.andR,Ea_f32_1.andR) & !fp_a_significand_f32_1.tail(1).orR
   val fp_a_is_inf_f16_0 = !io.fp_aIsFpCanonicalNAN & Ea_f16_0.andR & !fp_a_significand_f16_0.tail(1).orR
   val fp_a_is_inf_f16_1 = !io.fp_aIsFpCanonicalNAN & Ea_f16_1.andR & !fp_a_significand_f16_1.tail(1).orR
   val fp_a_is_inf_f16_2 = !io.fp_aIsFpCanonicalNAN & Ea_f16_2.andR & !fp_a_significand_f16_2.tail(1).orR
   val fp_a_is_inf_f16_3 = !io.fp_aIsFpCanonicalNAN & Ea_f16_3.andR & !fp_a_significand_f16_3.tail(1).orR
-  val fp_b_is_inf_f64   = !io.fp_bIsFpCanonicalNAN & Mux(io.res_widening & is_fp64,widen_Eb_f32_0.andR,Eb_f64.andR  ) & !fp_b_significand_f64.tail(1).orR
-  val fp_b_is_inf_f32_0 = !io.fp_bIsFpCanonicalNAN & Mux(io.res_widening & is_fp32,widen_Eb_f16_0.andR,Eb_f32_0.andR) & !fp_b_significand_f32_0.tail(1).orR
-  val fp_b_is_inf_f32_1 = !io.fp_bIsFpCanonicalNAN & Mux(io.res_widening & is_fp32,widen_Eb_f16_1.andR,Eb_f32_1.andR) & !fp_b_significand_f32_1.tail(1).orR
+  val fp_b_is_inf_f64   = !io.fp_bIsFpCanonicalNAN & Mux(fmaResWidening & is_fp64,widen_Eb_f32_0.andR,Eb_f64.andR  ) & !fp_b_significand_f64.tail(1).orR
+  val fp_b_is_inf_f32_0 = !io.fp_bIsFpCanonicalNAN & Mux(fmaResWidening & is_fp32,widen_Eb_f16_0.andR,Eb_f32_0.andR) & !fp_b_significand_f32_0.tail(1).orR
+  val fp_b_is_inf_f32_1 = !io.fp_bIsFpCanonicalNAN & Mux(fmaResWidening & is_fp32,widen_Eb_f16_1.andR,Eb_f32_1.andR) & !fp_b_significand_f32_1.tail(1).orR
   val fp_b_is_inf_f16_0 = !io.fp_bIsFpCanonicalNAN & Eb_f16_0.andR & !fp_b_significand_f16_0.tail(1).orR
   val fp_b_is_inf_f16_1 = !io.fp_bIsFpCanonicalNAN & Eb_f16_1.andR & !fp_b_significand_f16_1.tail(1).orR
   val fp_b_is_inf_f16_2 = !io.fp_bIsFpCanonicalNAN & Eb_f16_2.andR & !fp_b_significand_f16_2.tail(1).orR
