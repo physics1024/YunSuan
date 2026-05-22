@@ -348,7 +348,7 @@ VecOutput VPUGoldenModel::get_expected_output(VecInput input) {
 
 ElementInput VPUGoldenModel::select_element(VecInput input, int idx) {
   int sew = input.sew;
-  int number = (128 / 8) >> sew;
+  int number = (input.fuType == VFloatFMA && input.fuOpType == VFWMACCBF16) ? 4 : ((128 / 8) >> sew);
   if (idx > number) { printf("Bad idx %d > %d at sew %d\n", idx, number, sew); exit(1); }
   int widen_idx = input.uop_idx % 2 == 0 ? idx : number + idx;
 
